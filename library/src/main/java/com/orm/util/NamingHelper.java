@@ -1,14 +1,9 @@
 package com.orm.util;
 
-import android.text.TextUtils;
-
 import com.orm.dsl.Column;
 import com.orm.dsl.Table;
 
 import java.lang.reflect.Field;
-import java.util.ArrayList;
-import java.util.LinkedList;
-import java.util.List;
 
 public class NamingHelper {
 
@@ -74,7 +69,7 @@ public class NamingHelper {
     /**
      * Maps a Java Class to the name of the class.
      *
-     * @param table  the generic {@link java.lang.Class<T>} that defines a database table
+     * @param table  the generic {@link java.lang.Class} that defines a database table
      * @return if the given class is annotated with {@link com.orm.dsl.Table} then the value for
      *         {@link com.orm.dsl.Table#name()} will be returned. Else, the class' simple name will 
      *         be converted from CamelCase to UNDER_SCORE notation

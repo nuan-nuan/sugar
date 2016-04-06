@@ -9,6 +9,7 @@ import android.text.TextUtils;
 import android.util.Log;
 
 import com.orm.dsl.Table;
+import com.orm.dsl.Unique;
 import com.orm.util.NamingHelper;
 import com.orm.util.QueryBuilder;
 import com.orm.util.ReflectionUtil;
@@ -26,8 +27,8 @@ import java.util.NoSuchElementException;
 import static com.orm.SugarContext.getSugarContext;
 
 public class SugarRecord {
-
     public static final String SUGAR = "Sugar";
+
     private Long id = null;
 
     private static SQLiteDatabase getSugarDataBase() {
@@ -61,6 +62,29 @@ public class SugarRecord {
             sqLiteDatabase.setLockingEnabled(false);
             for (T object: objects) {
                 save(object);
+            }
+            sqLiteDatabase.setTransactionSuccessful();
+        } catch (Exception e) {
+            Log.i(SUGAR, "Error in saving in transaction " + e.getMessage());
+        } finally {
+            sqLiteDatabase.endTransaction();
+            sqLiteDatabase.setLockingEnabled(true);
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    public static <T> void updateInTx(T... objects) {
+        updateInTx(Arrays.asList(objects));
+    }
+
+    @SuppressWarnings("deprecation")
+    public static <T> void updateInTx(Collection<T> objects) {
+        SQLiteDatabase sqLiteDatabase = getSugarDataBase();
+        try {
+            sqLiteDatabase.beginTransaction();
+            sqLiteDatabase.setLockingEnabled(false);
+            for (T object: objects) {
+                update(object);
             }
             sqLiteDatabase.setTransactionSuccessful();
         } catch (Exception e) {
@@ -150,13 +174,13 @@ public class SugarRecord {
 
     public static <T> Iterator<T> findWithQueryAsIterator(Class<T> type, String query, String... arguments) {
         Cursor cursor = getSugarDataBase().rawQuery(query, arguments);
-        return new CursorIterator<T>(type, cursor);
+        return new CursorIterator<>(type, cursor);
     }
 
     public static <T> Iterator<T> findAsIterator(Class<T> type, String whereClause, String[] whereArgs, String groupBy, String orderBy, String limit) {
         Cursor cursor = getSugarDataBase().query(NamingHelper.toSQLName(type), null, whereClause, whereArgs,
                 groupBy, null, orderBy, limit);
-        return new CursorIterator<T>(type, cursor);
+        return new CursorIterator<>(type, cursor);
     }
 
     public static <T> List<T> find(Class<T> type, String whereClause, String... whereArgs) {
@@ -174,7 +198,11 @@ public class SugarRecord {
     }
 
     public static <T> List<T> find(Class<T> type, String whereClause, String[] whereArgs, String groupBy, String orderBy, String limit) {
-        Cursor cursor = getSugarDataBase().query(NamingHelper.toSQLName(type), null, whereClause, whereArgs,
+
+        String args[];
+        args = (whereArgs == null) ? null : replaceArgs(whereArgs);
+
+        Cursor cursor = getSugarDataBase().query(NamingHelper.toSQLName(type), null, whereClause, args,
                 groupBy, null, orderBy, limit);
 
         return getEntitiesFromCursor(cursor, type);
@@ -182,7 +210,7 @@ public class SugarRecord {
 
     public static <T> List<T> getEntitiesFromCursor(Cursor cursor, Class<T> type){
         T entity;
-        List<T> result = new ArrayList<T>();
+        List<T> result = new ArrayList<>();
         try {
             while (cursor.moveToNext()) {
                 entity = type.getDeclaredConstructor().newInstance();
@@ -198,15 +226,15 @@ public class SugarRecord {
         return result;
     }
 
-    public static <T> long count(Class<?> type) {
+    public static <T> long count(Class<T> type) {
         return count(type, null, null, null, null, null);
     }
 
-    public static <T> long count(Class<?> type, String whereClause, String[] whereArgs) {
+    public static <T> long count(Class<T> type, String whereClause, String[] whereArgs) {
     	return count(type, whereClause, whereArgs, null, null, null);
     }
 
-    public static <T> long count(Class<?> type, String whereClause, String[] whereArgs, String groupBy, String orderBy, String limit) {
+    public static <T> long count(Class<T> type, String whereClause, String[] whereArgs, String groupBy, String orderBy, String limit) {
         long result = -1;
         String filter = (!TextUtils.isEmpty(whereClause)) ? " where "  + whereClause : "";
         SQLiteStatement sqliteStatement;
@@ -260,7 +288,7 @@ public class SugarRecord {
             if (idField != null) {
                 idField.setAccessible(true);
                 try {
-                    idField.set(object, new Long(id));
+                    idField.set(object, id);
                 } catch (IllegalAccessException e) {
                     e.printStackTrace();
                 }
@@ -275,6 +303,50 @@ public class SugarRecord {
 
         return id;
     }
+
+    public static long update(Object object) {
+        return update(getSugarDataBase(), object);
+    }
+
+    static long update(SQLiteDatabase db, Object object) {
+        Map<Object, Long> entitiesMap = getSugarContext().getEntitiesMap();
+        List<Field> columns = ReflectionUtil.getTableFields(object.getClass());
+        ContentValues values = new ContentValues(columns.size());
+
+        StringBuilder whereClause = new StringBuilder();
+        List<String> whereArgs = new ArrayList<>();
+
+        for (Field column : columns) {
+            if(column.isAnnotationPresent(Unique.class)) {
+                try {
+                    column.setAccessible(true);
+                    String columnName = NamingHelper.toSQLName(column);
+                    Object columnValue = column.get(object);
+
+                    whereClause.append(columnName).append(" = ?");
+                    whereArgs.add(String.valueOf(columnValue));
+                } catch (IllegalAccessException e) {
+                    e.printStackTrace();
+                }
+            } else {
+                if (!column.getName().equals("id")) {
+                    ReflectionUtil.addFieldValueToColumn(values, column, object, entitiesMap);
+                }
+            }
+        }
+
+        String[] whereArgsArray = whereArgs.toArray(new String[whereArgs.size()]);
+        // Get SugarRecord based on Unique values
+        long rowsEffected = db.update(NamingHelper.toSQLName(object.getClass()), values, whereClause.toString(), whereArgsArray);
+
+        if (rowsEffected == 0) {
+            return save(db, object);
+        } else {
+            return rowsEffected;
+        }
+    }
+
+
 
     public static boolean isSugarEntity(Class<?> objectClass) {
         return objectClass.isAnnotationPresent(Table.class) || SugarRecord.class.isAssignableFrom(objectClass);
@@ -348,6 +420,10 @@ public class SugarRecord {
         return save(getSugarDataBase(), this);
     }
 
+    public long update() {
+        return update(getSugarDataBase(), this);
+    }
+
     @SuppressWarnings("unchecked")
     void inflate(Cursor cursor) {
         inflate(cursor, this, getSugarContext().getEntitiesMap());
@@ -405,6 +481,19 @@ public class SugarRecord {
         public void remove() {
             throw new UnsupportedOperationException();
         }
+    }
+
+    public static String[] replaceArgs(String[] args){
+
+        String [] replace = new String[args.length];
+        for (int i=0; i<args.length; i++){
+
+            replace[i]= (args[i].equals("true")) ? replace[i]="1" : (args[i].equals("false")) ? replace[i]="0" : args[i];
+
+        }
+
+        return replace;
+
     }
 
 }
